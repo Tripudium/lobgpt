@@ -1,0 +1,58 @@
+[project]
+name = "lobgpt"
+version = "0.1.0"
+description = "Tripudium LOB transformer models"
+readme = "README.md"
+authors = [
+    { name = "Martin", email = "martin@tripudium.tech" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "datasets>=4.0.0",
+    "ipykernel>=6.29.5",
+    "ipython==8.32.0",
+    "lightning>=2.5.5",
+    "matplotlib>=3.10.1",
+    "numpy>=2.2.3",
+    "pathlib>=1.0.1",
+    "polars>=1.23.0",
+    "pyarrow>=20.0.0",
+    "pybit>=5.9.0",
+    "pytest>=8.3.4",
+    "python-dotenv>=1.1.1",
+    "pytz>=2025.1",
+    "pyyaml>=6.0.0",
+    "ruff>=0.9.9",
+    "tardis-dev>=2.0.0a14",
+    "torch>=2.8.0",
+    "tqdm>=4.67.1",
+    "typing>=3.10.0.0",
+    "wandb>=0.21.4",
+    "websockets>=15.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jupyterlab",
+    "ipykernel",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "ruff>=0.9.9",
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "--maxfail=1 --disable-warnings -q"
+testpaths = [
+    "tests",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"] # Enable standard, pyflakes & import-sorting rules
+
