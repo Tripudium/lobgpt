@@ -6,9 +6,8 @@ management, versioning, and sharing capabilities. It converts our Polars-based
 TLOB data into HF datasets format with proper train/val/test splits.
 """
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
-import datasets
 import numpy as np
 import polars as pl
 import torch
@@ -202,7 +201,7 @@ class LOBHuggingFaceDataset:
         train_labels = self.dataset_dict['train']['labels']
         unique, counts = np.unique(train_labels, return_counts=True)
         label_names = ["Up", "Stationary", "Down"]
-        print(f"\n  Training label distribution:")
+        print("\n  Training label distribution:")
         for label, count in zip(unique, counts):
             pct = (count / len(train_labels)) * 100
             print(f"    {label_names[int(label)]}: {count} ({pct:.1f}%)")
