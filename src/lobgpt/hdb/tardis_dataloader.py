@@ -39,11 +39,9 @@ import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Generator
 
 import nest_asyncio
 import polars as pl
-import pyarrow.parquet as pq
 from tardis_dev import datasets
 
 # Local imports
@@ -110,6 +108,17 @@ def generate_schema(type: str = "book_snapshot_25") -> dict[str, pl.DataType]:
             "price": pl.Float64,
             "amount": pl.Float64
         }
+    elif type == "incremental_book_L2":
+        schema = {
+            "exchange": pl.String,
+            "symbol": pl.String,
+            "timestamp": pl.Int64,
+            "local_timestamp": pl.Int64,
+            "is_snapshot": pl.Boolean,
+            "side": pl.String,
+            "price": pl.Float64,
+            "amount": pl.Float64
+        }
     else:
         raise ValueError(f"Unknown type: {type}")
     return schema
@@ -122,7 +131,7 @@ class TardisData(DataLoader):
     """
 
     def __init__(
-        self, root: str | Path = TARDIS_DATA_PATH, market: str = "binance-futures"
+        self, root: str | Path = TARDIS_DATA_PATH, market: str = "binance-futures", api_key: str = TARDIS_API_KEY
     ):
         logger.info("Initializing TardisDataLoader with path %s", root)
         self.market = market
@@ -131,6 +140,7 @@ class TardisData(DataLoader):
         if not isinstance(root, Path):
             root = Path(root)
         root = root / market
+        self.api_key = api_key
         super().__init__(root)
 
     def _load_data(
@@ -139,6 +149,9 @@ class TardisData(DataLoader):
         """
         Load data for a given product and times.
         """
+        assert type in ["book_snapshot_25", "trades", "incremental_book_L2"]
+        assert self.market in ["binance-futures", "binance-spot", "bybit-futures"]
+
         if len(times) != 2:
             raise ValueError(
                 "Times must be a list of two strings in the format '%y%m%d.%H%M'"
@@ -186,26 +199,32 @@ class TardisData(DataLoader):
         product: str,
         times: list[str],
         depth: int = 10,
-        lazy=False,
+        lazy: bool = False,
         type: str = "book_snapshot_25",
     ) -> pl.DataFrame:
         """
         Load book data for a given product and times.
         """
         df = self._load_data(product, times, type, lazy)
-        price_columns = [
-            [
-                f"asks[{i}].price",
-                f"asks[{i}].amount",
-                f"bids[{i}].price",
-                f"bids[{i}].amount",
+        if type == "book_snapshot_25":
+            price_columns = [
+                [
+                    f"asks[{i}].price",
+                    f"asks[{i}].amount",
+                    f"bids[{i}].price",
+                    f"bids[{i}].amount",
+                ]
+                for i in range(depth)
             ]
-            for i in range(depth)
-        ]
-        price_columns = [col for sublist in price_columns for col in sublist]
-        columns = ["ts", "ts_local"] + price_columns
-        df = df.select(columns)
-        df = df.unique(subset=price_columns, maintain_order=True)
+            price_columns = [col for sublist in price_columns for col in sublist]
+            columns = ["ts", "ts_local"] + price_columns
+            df = df.select(columns)
+            df = df.unique(subset=price_columns, maintain_order=True)
+        elif type == "incremental_book_L2":
+            columns = ["ts", "ts_local", "is_snapshot", "side", "price", "amount"]
+            df = df.select(columns)
+        else:
+            raise ValueError(f"Invalid type: {type}")
         return df
     
     def load_trades(
@@ -231,6 +250,60 @@ class TardisData(DataLoader):
             dfs.append(df)
         df = pl.concat(dfs).sort(["ts", "id"])
         return df
+
+    def load_inc(
+        self,
+        product: str,
+        times: list[str],
+        lazy: bool = False,
+    ) -> pl.DataFrame:
+        """
+        Load combined incremental book and trade data for a given product and times.
+
+        This method merges order book updates (limit orders) with trade data (market orders)
+        into a single unified DataFrame sorted by timestamp.
+
+        Args:
+            product: Trading pair symbol (e.g., "BTCUSDT")
+            times: List of two strings in format '%y%m%d.%H%M%S' [start, end]
+            lazy: Whether to use lazy loading
+
+        Returns:
+            DataFrame with columns:
+                - ts: Timestamp in nanoseconds
+                - ts_local: Local timestamp in nanoseconds
+                - event: 0 for market orders (trades), 1 for limit orders (book updates)
+                - id: Trade ID (null for book updates)
+                - is_snapshot: Whether this is a snapshot (book updates only)
+                - side: -1 for sell, 1 for buy
+                - price: Order/trade price
+                - amount: Order/trade amount
+        """
+        book_df = self._load_data(product, times, "incremental_book_L2", lazy)
+        trades_df = self._load_data(product, times, "trades", lazy)
+
+        book_df = book_df.with_columns([
+            pl.lit(1).alias("event"),
+            pl.lit(None).cast(pl.Int64).alias("id"),
+            pl.col("side").map_elements(
+                lambda x: 1 if x == "buy" else -1,
+                return_dtype=pl.Int32,
+            ),
+        ]).select(["ts", "ts_local", "event", "id", "is_snapshot", "side", "price", "amount"])
+
+        trades_df = trades_df.with_columns([
+            pl.lit(0).alias("event"),
+            pl.lit(False).alias("is_snapshot"),
+            pl.col("side").map_elements(
+                lambda x: 1 if x == "buy" else -1,
+                return_dtype=pl.Int32,
+            ),
+        ]).select(["ts", "ts_local", "event", "id", "is_snapshot", "side", "price", "amount"])
+
+        combined_df = pl.concat([book_df, trades_df])
+        combined_df = combined_df.sort(["ts", "event"])
+
+        return combined_df
 
     def load_sync(
         self,
@@ -351,7 +424,7 @@ class TardisData(DataLoader):
             from_date=day,
             to_date=day,
             symbols=[product],
-            api_key=TARDIS_API_KEY,
+            api_key=self.api_key,
             download_dir=self.raw_path,
             get_filename=default_file_name,
         )
@@ -382,152 +455,3 @@ class TardisData(DataLoader):
         df.write_parquet(outfilename)
         os.remove(filename.replace(".gz", ""))
         return df
-
-    def stream_book(
-        self, product: str, times: list[str], depth: int = 10, batch_size: int = 10000
-    ) -> Generator[pl.DataFrame, None, None]:
-        """
-        Stream book data for a given product and times in batches.
-
-        Args:
-            product: Product symbol
-            times: List of two strings in format '%y%m%d.%H%M%S'
-            depth: Order book depth
-            batch_size: Number of rows per batch
-
-        Yields:
-            Polars DataFrame batches
-        """
-        if len(times) != 2:
-            raise ValueError(
-                "Times must be a list of two strings in the format '%y%m%d.%H%M%S'"
-            )
-
-        try:
-            dtimes = [datetime.strptime(t, "%y%m%d.%H%M%S") for t in times]
-        except ValueError:
-            raise ValueError("Times must be in the format '%y%m%d.%H%M%S'")
-
-        days = get_days(dtimes[0], dtimes[1])
-        start_ns = nanoseconds(times[0])
-        end_ns = nanoseconds(times[1])
-
-        price_columns = []
-        for i in range(depth):
-            price_columns.extend(
-                [
-                    f"asks[{i}].price",
-                    f"asks[{i}].amount",
-                    f"bids[{i}].price",
-                    f"bids[{i}].amount",
-                ]
-            )
-        select_columns = ["ts", "ts_local"] + price_columns
-
-        for day in days:
-            filename = f"{str(self.processed_path)}/{self.market}_book_snapshot_25_{day}_{product}.parquet"
-
-            # Download and process if file doesn't exist
-            if not Path(filename).exists():
-                logger.info(f"File {filename} not found, downloading...")
-                self.download(product, day, "book_snapshot_25")
-                logger.info("File downloaded, processing...")
-                df = self.process(product, day, "book_snapshot_25")
-                if df is None:
-                    logger.warning(
-                        f"Product {product} with type book_snapshot_25 and day {day} is not available"
-                    )
-                    continue
-
-            # Stream the parquet file in batches
-            try:
-                parquet_file = pq.ParquetFile(filename)
-
-                for batch in parquet_file.iter_batches(batch_size=batch_size):
-                    batch_df = pl.from_arrow(batch)
-
-                    batch_df = batch_df.filter(
-                        pl.col("ts").is_between(start_ns, end_ns)
-                    )
-
-                    if batch_df.height == 0:
-                        continue
-
-                    batch_df = batch_df.select(select_columns)
-
-                    batch_df = batch_df.unique(
-                        subset=price_columns, maintain_order=True
-                    )
-
-                    if batch_df.height > 0:
-                        yield batch_df
-
-            except Exception as e:
-                logger.error(f"Error streaming file {filename}: {e}")
-                continue
-
-    def stream_trades(
-        self, product: str, times: list[str], batch_size: int = 10000
-    ) -> Generator[pl.DataFrame, None, None]:
-        """
-        Stream trade data for a given product and times in batches.
-
-        Args:
-            product: Product symbol
-            times: List of two strings in format '%y%m%d.%H%M%S'
-            batch_size: Number of rows per batch
-
-        Yields:
-            Polars DataFrame batches
-        """
-        if len(times) != 2:
-            raise ValueError(
-                "Times must be a list of two strings in the format '%y%m%d.%H%M%S'"
-            )
-
-        try:
-            dtimes = [datetime.strptime(t, "%y%m%d.%H%M%S") for t in times]
-        except ValueError:
-            raise ValueError("Times must be in the format '%y%m%d.%H%M%S'")
-
-        days = get_days(dtimes[0], dtimes[1])
-        start_ns = nanoseconds(times[0])
-        end_ns = nanoseconds(times[1])
-
-        for day in days:
-            filename = f"{str(self.processed_path)}/{self.market}_trades_{day}_{product}.parquet"
-
-            # Download and process if file doesn't exist
-            if not Path(filename).exists():
-                logger.info(f"File {filename} not found, downloading...")
-                self.download(product, day, "trades")
-                logger.info("File downloaded, processing...")
-                df = self.process(product, day, "trades")
-                if df is None:
-                    logger.warning(
-                        f"Product {product} with type trades and day {day} is not available"
-                    )
-                    continue
-
-            # Stream the parquet file in batches
-            try:
-                parquet_file = pq.ParquetFile(filename)
-
-                for batch in parquet_file.iter_batches(batch_size=batch_size):
-                    # Convert to Polars DataFrame
-                    batch_df = pl.from_arrow(batch)
-
-                    # Filter by time range
-                    batch_df = batch_df.filter(
-                        pl.col("ts").is_between(start_ns, end_ns)
-                    )
-
-                    # Add product column
-                    batch_df = batch_df.with_columns(pl.lit(product).alias("product"))
-
-                    if batch_df.height > 0:
-                        yield batch_df
-
-            except Exception as e:
-                logger.error(f"Error streaming file {filename}: {e}")
-                continue

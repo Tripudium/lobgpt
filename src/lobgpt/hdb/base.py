@@ -37,7 +37,6 @@ See Also:
 
 import logging
 from pathlib import Path
-from typing import Generator
 
 import polars as pl
 
@@ -115,20 +114,12 @@ class DataLoader:
         self._processed_path = path
 
     def load_trades(
-        self, products: list[str] | str, times: list[str], lazy=False
+        self, _products: list[str] | str, _times: list[str], _lazy=False
     ) -> pl.DataFrame:
         """
         Load trades data for a given product and times.
         """
-        if isinstance(products, str):
-            products = [products]
-        dfs = []
-        for product in products:
-            df = self._load_data(product, times, "trade", lazy)
-            df = df.with_columns(pl.lit(product).alias("product"))
-            dfs.append(df)
-        df = pl.concat(dfs).sort("ts")
-        return df
+        raise NotImplementedError
 
     def load_book(
         self, _product: str, _times: list[str], _depth: int = 10, _lazy: bool = False
@@ -155,41 +146,4 @@ class DataLoader:
         raise NotImplementedError
 
     def process(self, _product: str, _month: str, _type: str):
-        raise NotImplementedError
-
-    def stream_book(
-        self,
-        _product: str,
-        _times: list[str],
-        _depth: int = 10,
-        _batch_size: int = 10000,
-    ) -> Generator[pl.DataFrame, None, None]:
-        """
-        Stream book data for a given product and times in batches.
-
-        Args:
-            _product: Product symbol
-            _times: List of two strings in format '%y%m%d.%H%M%S'
-            _depth: Order book depth
-            _batch_size: Number of rows per batch
-
-        Yields:
-            Polars DataFrame batches
-        """
-        raise NotImplementedError
-
-    def stream_trades(
-        self, _product: str, _times: list[str], _batch_size: int = 10000
-    ) -> Generator[pl.DataFrame, None, None]:
-        """
-        Stream trade data for a given product and times in batches.
-
-        Args:
-            _product: Product symbol
-            _times: List of two strings in format '%y%m%d.%H%M%S'
-            _batch_size: Number of rows per batch
-
-        Yields:
-            Polars DataFrame batches
-        """
         raise NotImplementedError
