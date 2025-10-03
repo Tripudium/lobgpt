@@ -1,0 +1,28 @@
+# BTC/USDT data configuration
+
+# Data source
+product: "BTCUSDT"
+depth: 10
+
+# Time periods
+train_times: ['250912.000000', '250912.120000']  # 2 hours
+val_times: ['250912.120000', '250912.130000']    # 1 hour
+test_times: ['250912.130000', '250912.140000']   # 1 hour
+
+# Tokenization
+tokenizer:
+  tick_size: 0.1
+  ref_size: 1.0
+
+# Dataset parameters
+sequence_length: 200
+horizon: 10
+threshold: 0.002
+train_stride: 10
+val_stride: 50
+test_stride: 100
+
+# DataLoader
+batch_size: 16
+num_workers: 4
+pin_memory: true

@@ -1,0 +1,25 @@
+# Small LOB Transformer configuration
+_target_: lobgpt.models.lob_transformer.LOBTransformerConfig
+
+# Architecture
+vocab_size: 10000  # Will be overridden by tokenizer vocab size
+d_model: 512
+n_layers: 6
+n_heads: 8
+d_ff: 2048
+max_seq_length: 1024
+dropout: 0.1
+
+# Position encoding
+use_learned_pos: true
+use_time_encoding: true
+time_buckets: 288  # 5-minute buckets in a day
+
+# Training
+tie_embeddings: true
+layer_norm_eps: 1e-5
+initializer_range: 0.02
+
+# Financial-specific
+regime_conditioning: false
+n_regimes: 4

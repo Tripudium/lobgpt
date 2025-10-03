@@ -1,0 +1,56 @@
+# @package _global_
+
+# Hydra configuration for LOB Transformer training
+defaults:
+  - model: lob_transformer_small
+  - data: btc_usdt
+  - training: default
+  - _self_
+
+# Experiment settings
+experiment_name: "lob_transformer_sweep"
+project_name: "lob-transformer"
+seed: 42
+
+# Paths
+data_dir: "./data"
+output_dir: "./outputs"
+checkpoint_dir: "./checkpoints"
+
+# Hardware settings
+accelerator: "auto"  # auto, gpu, cpu
+devices: "auto"
+precision: "16-mixed"
+
+# Logging
+log_every_n_steps: 50
+val_check_interval: 0.25
+
+# Early stopping
+early_stopping:
+  monitor: "val_loss"
+  patience: 15
+  mode: "min"
+
+# Model checkpointing
+checkpoint:
+  monitor: "val_loss"
+  mode: "min"
+  save_top_k: 3
+  save_last: true
+  filename: "{epoch}-{val_loss:.3f}"
+
+# Weights & Biases
+wandb:
+  enabled: true
+  project: ${project_name}
+  name: ${experiment_name}
+  tags: ["transformer", "lob", "financial"]
+
+# Hydra settings
+hydra:
+  run:
+    dir: ${output_dir}/${experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: ${output_dir}/${experiment_name}
+    subdir: ${hydra.job.num}

@@ -1,0 +1,30 @@
+# Grid search configuration using Hydra
+# @package _global_
+
+defaults:
+  - override /model: lob_transformer_small
+  - override /data: btc_usdt
+  - override /training: default
+
+# Override for grid search
+training:
+  max_epochs: 20  # Shorter for grid search
+
+# Hydra grid search configuration
+hydra:
+  mode: MULTIRUN
+  sweep:
+    dir: ${output_dir}/grid_search
+    subdir: lr_${training.learning_rate}_bs_${data.batch_size}_dm_${model.d_model}
+
+  sweeper:
+    _target_: hydra._internal.BasicSweeper
+    max_batch_size: 4  # Run 4 jobs in parallel
+
+# Grid search parameters
+# Use Hydra's sweep syntax
+training.learning_rate: 1e-4,3e-4,6e-4,1e-3
+data.batch_size: 16,32,64
+model.d_model: 256,512
+model.n_layers: 4,6
+model.dropout: 0.1,0.2

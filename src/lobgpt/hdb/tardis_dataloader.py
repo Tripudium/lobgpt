@@ -286,7 +286,7 @@ class TardisData(DataLoader):
             pl.lit(1).alias("event"),
             pl.lit(None).cast(pl.Int64).alias("id"),
             pl.col("side").map_elements(
-                lambda x: 1 if x == "buy" else -1,
+                lambda x: 1 if x == "bid" else -1,  # bid=1, ask=-1
                 return_dtype=pl.Int32,
             ),
         ]).select(["ts", "ts_local", "event", "id", "is_snapshot", "side", "price", "amount"])
