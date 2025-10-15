@@ -11,6 +11,8 @@ import torch
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
+from lobgpt.time_encoding import TimeEncoder, create_time_encoder_for_crypto
+
 
 class L2BookDataset(Dataset):
     """
@@ -248,7 +250,8 @@ class TokenBookDataset(Dataset):
         threshold: float = 0.002,
         label_type: str = "classification",
         stride: int = 1,
-        cache: bool = False
+        cache: bool = False,
+        time_encoder: Optional[TimeEncoder] = None
     ):
         """
         Initialize Tokenized Book Dataset.
@@ -263,6 +266,7 @@ class TokenBookDataset(Dataset):
             label_type: "classification" or "regression"
             stride: Step size between sequences
             cache: Whether to cache processed sequences in memory
+            time_encoder: TimeEncoder for generating time buckets (optional)
         """
         self.inc_df = inc_df
         self.book_states = book_states
@@ -274,6 +278,9 @@ class TokenBookDataset(Dataset):
         self.stride = stride
         self.cache = cache
 
+        # Set up time encoder (use default crypto encoder if none provided)
+        self.time_encoder = time_encoder or create_time_encoder_for_crypto()
+
         # Prepare data
         self._prepare_data()
 
@@ -284,13 +291,44 @@ class TokenBookDataset(Dataset):
         """Prepare tokenized data."""
 
         # Tokenize events
-        self.tokens = self.tokenizer.tokenize_events(self.inc_df, self.book_states)
+        self.tokens = self.tokenizer.tokenize(self.inc_df)
+
+        # Prepare time buckets from timestamps
+        self._prepare_time_features()
 
         # Prepare labels from book states
         self._prepare_labels()
 
         # Calculate number of sequences
         self.n_sequences = max(0, (len(self.tokens) - self.sequence_length - self.horizon + 1) // self.stride)
+
+    def _prepare_time_features(self):
+        """Prepare time-based features from timestamps."""
+        # Extract timestamps from incremental data
+        # Note: timestamps are aligned with tokens during tokenization
+        timestamp_column = None
+        for candidate in ("tst", "ts", "timestamp"):
+            if candidate in self.inc_df.columns:
+                timestamp_column = candidate
+                break
+
+        if timestamp_column is None:
+            raise ValueError("Incremental dataframe must contain a timestamp column (expected one of 'tst', 'ts', 'timestamp').")
+
+        event_timestamps = self.inc_df[timestamp_column].to_numpy()
+
+        # Filter timestamps to match the number of tokens
+        # (some events might be skipped during tokenization)
+        if len(event_timestamps) != len(self.tokens):
+            # Take the first len(tokens) timestamps
+            # This assumes tokenization preserves order and skips events from the end
+            event_timestamps = event_timestamps[:len(self.tokens)]
+
+        # Generate time buckets
+        self.time_buckets = self.time_encoder.timestamps_to_time_buckets(event_timestamps)
+
+        # Generate additional time features for analysis
+        self.time_features = self.time_encoder.get_market_session_features(event_timestamps)
 
     def _prepare_labels(self):
         """Prepare labels based on mid-price movement."""
@@ -336,8 +374,8 @@ class TokenBookDataset(Dataset):
         """Return number of sequences."""
         return self.n_sequences
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get a single sequence and label."""
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """Get a single sequence with time buckets and label."""
 
         # Check cache
         if self._cache is not None and idx in self._cache:
@@ -348,24 +386,35 @@ class TokenBookDataset(Dataset):
         end_idx = start_idx + self.sequence_length
 
         # Get token sequence
-        sequence = self.tokens[start_idx:end_idx]
-        x = torch.tensor(sequence, dtype=torch.long)
+        token_sequence = self.tokens[start_idx:end_idx]
+        input_ids = torch.tensor(token_sequence, dtype=torch.long)
+
+        # Get time bucket sequence
+        time_bucket_sequence = self.time_buckets[start_idx:end_idx]
+        time_buckets = torch.tensor(time_bucket_sequence, dtype=torch.long)
 
         # Get label
         if idx < len(self.labels):
             if self.label_type == "classification":
-                y = torch.tensor(self.labels[idx], dtype=torch.long)
+                labels = torch.tensor(self.labels[idx], dtype=torch.long)
             else:
-                y = torch.tensor(self.labels[idx], dtype=torch.float32)
+                labels = torch.tensor(self.labels[idx], dtype=torch.float32)
         else:
-            y = torch.tensor(1 if self.label_type == "classification" else 0.0,
+            labels = torch.tensor(1 if self.label_type == "classification" else 0.0,
                            dtype=torch.long if self.label_type == "classification" else torch.float32)
+
+        # Create output dictionary
+        output = {
+            "input_ids": input_ids,
+            "time_buckets": time_buckets,
+            "labels": labels
+        }
 
         # Cache if enabled
         if self._cache is not None:
-            self._cache[idx] = (x, y)
+            self._cache[idx] = output
 
-        return x, y
+        return output
 
     def get_vocab_size(self) -> int:
         """Return vocabulary size from tokenizer."""

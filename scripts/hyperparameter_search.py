@@ -1,18 +1,14 @@
 """
-Hyperparameter optimization using Optuna.
+Hyperparameter optimization
 """
 
-import os
 import sys
 from pathlib import Path
-from typing import Dict, Any
 
 import hydra
 import optuna
-import pytorch_lightning as pl
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
-# Add project root to path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from scripts.train_with_config import train_model
@@ -127,7 +123,8 @@ def run_study(cfg: DictConfig):
     )
 
     # Define objective with config
-    objective_with_config = lambda trial: objective(trial, cfg)
+    def objective_with_config(trial):
+        return objective(trial, cfg)
 
     # Optimize
     study.optimize(
@@ -163,7 +160,6 @@ def run_study(cfg: DictConfig):
 
     # Optionally create visualization
     try:
-        import plotly
         fig = optuna.visualization.plot_optimization_history(study)
         fig.write_html(Path(cfg.output_dir) / "optimization_history.html")
 

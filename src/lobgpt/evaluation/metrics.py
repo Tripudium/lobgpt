@@ -2,16 +2,17 @@
 Evaluation metrics for LOB Transformer models.
 """
 
+from dataclasses import dataclass
+from typing import Optional
+
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 import torch
 import torch.nn.functional as F
-import numpy as np
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import confusion_matrix
 
-from lobgpt.tokenizer import LOBTokenizer, EventType, Side, PriceLevel
+from lobgpt.tokenizer import EventType, LOBTokenizer, PriceBucket, Side
 
 
 @dataclass
@@ -25,7 +26,7 @@ class LOBMetrics:
     # Event-level metrics
     event_type_accuracy: float
     side_accuracy: float
-    price_level_accuracy: float
+    price_bucket_accuracy: float
     size_bucket_accuracy: float
 
     # Financial metrics
@@ -139,7 +140,7 @@ class LOBEvaluator:
                 self.event_total["side"] += 1
 
                 # Price level accuracy
-                if pred_event.price_level == true_event.price_level:
+                if pred_event.price_bucket == true_event.price_bucket:
                     self.event_correct["price"] += 1
                 self.event_total["price"] += 1
 
@@ -148,8 +149,8 @@ class LOBEvaluator:
                     self.event_correct["size"] += 1
                 self.event_total["size"] += 1
 
-                # Direction accuracy (mid-price move)
-                if pred_event.mid_move.direction == true_event.mid_move.direction:
+                # Direction accuracy based on price bucket sign
+                if self._price_bucket_sign(pred_event.price_bucket) == self._price_bucket_sign(true_event.price_bucket):
                     self.direction_correct += 1
                 self.direction_total += 1
 
@@ -169,7 +170,7 @@ class LOBEvaluator:
         # Event-level metrics
         event_type_accuracy = self.event_correct["type"] / max(self.event_total["type"], 1)
         side_accuracy = self.event_correct["side"] / max(self.event_total["side"], 1)
-        price_level_accuracy = self.event_correct["price"] / max(self.event_total["price"], 1)
+        price_bucket_accuracy = self.event_correct["price"] / max(self.event_total["price"], 1)
         size_bucket_accuracy = self.event_correct["size"] / max(self.event_total["size"], 1)
 
         # Financial metrics
@@ -190,7 +191,7 @@ class LOBEvaluator:
             token_perplexity=token_perplexity,
             event_type_accuracy=event_type_accuracy,
             side_accuracy=side_accuracy,
-            price_level_accuracy=price_level_accuracy,
+            price_bucket_accuracy=price_bucket_accuracy,
             size_bucket_accuracy=size_bucket_accuracy,
             direction_accuracy=direction_accuracy,
             mid_price_mae=mid_price_mae,
@@ -208,7 +209,7 @@ class LOBEvaluator:
             token_perplexity=float('inf'),
             event_type_accuracy=0.0,
             side_accuracy=0.0,
-            price_level_accuracy=0.0,
+            price_bucket_accuracy=0.0,
             size_bucket_accuracy=0.0,
             direction_accuracy=0.0,
             mid_price_mae=0.0,
@@ -249,6 +250,12 @@ class LOBEvaluator:
         true_rates = [len(seq) for seq in self.sequences_true]
 
         return np.mean(np.abs(np.array(pred_rates) - np.array(true_rates)))
+
+    @staticmethod
+    def _price_bucket_sign(bucket: PriceBucket) -> int:
+        if bucket == PriceBucket.AT_REFERENCE:
+            return 0
+        return -1 if bucket.value < PriceBucket.AT_REFERENCE.value else 1
 
     def _compute_token_distribution_kl(self) -> float:
         """Compute KL divergence between predicted and true token distributions."""
@@ -320,15 +327,15 @@ class LOBEvaluator:
         axes[0,1].set_xlabel('Predicted')
         axes[0,1].set_ylabel('True')
 
-        # Price level confusion matrix
-        price_levels = [e.price_level.value for e in true_events]
-        pred_price_levels = [e.price_level.value for e in pred_events]
+        # Price bucket confusion matrix
+        price_levels = [e.price_bucket.value for e in true_events]
+        pred_price_levels = [e.price_bucket.value for e in pred_events]
 
-        cm = confusion_matrix(price_levels, pred_price_levels, labels=[pl.value for pl in PriceLevel])
+        cm = confusion_matrix(price_levels, pred_price_levels, labels=[pl.value for pl in PriceBucket])
         sns.heatmap(cm, annot=True, fmt='d', ax=axes[1,0],
-                   xticklabels=[pl.value for pl in PriceLevel],
-                   yticklabels=[pl.value for pl in PriceLevel])
-        axes[1,0].set_title('Price Level Confusion Matrix')
+                   xticklabels=[pl.value for pl in PriceBucket],
+                   yticklabels=[pl.value for pl in PriceBucket])
+        axes[1,0].set_title('Price Bucket Confusion Matrix')
         axes[1,0].set_xlabel('Predicted')
         axes[1,0].set_ylabel('True')
 
@@ -374,7 +381,7 @@ Token-Level Metrics:
 Event-Level Metrics:
 - Event Type Accuracy: {metrics.event_type_accuracy:.4f}
 - Side Accuracy: {metrics.side_accuracy:.4f}
-- Price Level Accuracy: {metrics.price_level_accuracy:.4f}
+- Price Bucket Accuracy: {metrics.price_bucket_accuracy:.4f}
 - Size Bucket Accuracy: {metrics.size_bucket_accuracy:.4f}
 
 Financial Metrics:

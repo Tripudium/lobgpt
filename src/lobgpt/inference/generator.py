@@ -2,15 +2,14 @@
 Advanced inference and generation utilities for LOB Transformer.
 """
 
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional
+
 import torch
 import torch.nn.functional as F
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Union, Callable
-from dataclasses import dataclass
-import time
 
 from lobgpt.models.lob_transformer import LOBTransformer
-from lobgpt.tokenizer import LOBTokenizer, LOBToken
+from lobgpt.tokenizer import EventType, LOBTokenizer, TokenComponents
 
 
 @dataclass
@@ -82,17 +81,24 @@ class ConstrainedSampler:
     def _apply_event_sequence_rules(
         self,
         logits: torch.Tensor,
-        last_event: LOBToken
+        last_event: TokenComponents
     ) -> torch.Tensor:
         """Apply rules about valid event sequences."""
-        # Example: Reduce probability of immediate cancellation after add
-        if last_event.event_type.value == "ADD":
-            # Reduce probability of CANCEL events immediately after ADD
-            for token_id, token_obj in self.tokenizer.id_to_token.items():
-                if token_obj and token_obj.event_type.value == "CANCEL":
-                    logits[token_id] *= 0.5
+        squeezed = False
+        if logits.ndim == 1:
+            logits = logits.unsqueeze(0)
+            squeezed = True
 
-        return logits
+        if last_event.event_type == EventType.ADD:
+            cancel_ids = [
+                token_id
+                for token_id, token_obj in self.tokenizer.id_to_token.items()
+                if token_obj.event_type == EventType.CANCEL
+            ]
+            if cancel_ids:
+                logits[..., cancel_ids] *= 0.5
+
+        return logits.squeeze(0) if squeezed else logits
 
     def _apply_price_constraints(
         self,
@@ -407,10 +413,10 @@ class LOBInference:
 
     def predict_next_events(
         self,
-        recent_events: List[LOBToken],
+        recent_events: List[TokenComponents],
         n_predictions: int = 10,
         strategy: str = "sampling"
-    ) -> List[LOBToken]:
+    ) -> List[TokenComponents]:
         """Predict next events given recent market activity."""
         # Encode recent events
         token_ids = [self.tokenizer.encode_token(event) for event in recent_events]
@@ -449,9 +455,9 @@ class LOBInference:
 
     def estimate_probabilities(
         self,
-        recent_events: List[LOBToken],
-        candidate_events: List[LOBToken]
-    ) -> Dict[LOBToken, float]:
+        recent_events: List[TokenComponents],
+        candidate_events: List[TokenComponents]
+    ) -> Dict[TokenComponents, float]:
         """Estimate probabilities for candidate next events."""
         # Encode recent events
         token_ids = [self.tokenizer.encode_token(event) for event in recent_events]
@@ -477,10 +483,10 @@ class LOBInference:
 
     def simulate_market_scenario(
         self,
-        initial_events: List[LOBToken],
+        initial_events: List[TokenComponents],
         n_steps: int = 100,
         branching_factor: int = 3
-    ) -> List[List[LOBToken]]:
+    ) -> List[List[TokenComponents]]:
         """Simulate multiple market scenarios."""
         scenarios = []
 

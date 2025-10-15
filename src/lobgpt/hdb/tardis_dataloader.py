@@ -37,7 +37,7 @@ import gzip
 import logging
 import os
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import nest_asyncio
@@ -48,25 +48,13 @@ from tardis_dev import datasets
 from lobgpt.hdb.base import DataLoader
 from lobgpt.hdb.config import TARDIS_API_KEY
 from lobgpt.hdb.registry import register_dataset
+from lobgpt.hdb.utils import get_days
 from lobgpt.utils.time import nanoseconds, round_up_to_nearest, str_to_timedelta
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 TARDIS_DATA_PATH = Path(__file__).parent.parent.parent.parent / "data" / "tardis"
-
-
-def get_days(start_date: datetime, end_date: datetime) -> list[str]:
-    """
-    Generate a list of days between them as strings in 'YYYY-MM-DD' format.
-    """
-    days = []
-    current_date = start_date
-
-    while current_date <= end_date:
-        days.append(current_date.strftime("%Y-%m-%d"))
-        current_date += timedelta(days=1)
-    return sorted(days)
 
 
 def default_file_name(exchange, data_type, date, symbol, format):

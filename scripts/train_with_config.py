@@ -2,13 +2,10 @@
 Configurable training script for LOB Transformer using Hydra.
 """
 
-import os
-from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 import hydra
 import pytorch_lightning as pl
-import torch
 import wandb
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import (
@@ -193,7 +190,7 @@ def train_model(cfg: DictConfig) -> Dict[str, Any]:
     # Create model configuration
     model_config = create_model_config(cfg, len(tokenizer.vocab))
 
-    print(f"\nModel configuration:")
+    print("\nModel configuration:")
     print(f"  Vocab size: {model_config.vocab_size}")
     print(f"  Model dim: {model_config.d_model}")
     print(f"  Layers: {model_config.n_layers}")
@@ -246,13 +243,13 @@ def train_model(cfg: DictConfig) -> Dict[str, Any]:
     )
 
     # Train
-    print(f"\nStarting training...")
+    print("\nStarting training...")
     trainer.fit(lightning_model, data_module)
 
     # Test if test dataset available
     test_results = {}
     if test_dataset is not None:
-        print(f"\nRunning test...")
+        print("\nRunning test...")
         test_results = trainer.test(lightning_model, data_module)
 
     # Get best metrics

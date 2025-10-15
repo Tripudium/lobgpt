@@ -63,6 +63,7 @@ class LOBTransformerLightning(pl.LightningModule):
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Training step."""
         input_ids = batch["input_ids"]
+        time_buckets = batch.get("time_buckets")
 
         # Shift for next-token prediction
         if input_ids.size(1) <= 1:
@@ -71,8 +72,13 @@ class LOBTransformerLightning(pl.LightningModule):
         inputs = input_ids[:, :-1]
         targets = input_ids[:, 1:]
 
+        # Shift time buckets if available
+        time_inputs = None
+        if time_buckets is not None:
+            time_inputs = time_buckets[:, :-1]
+
         # Forward pass
-        logits = self(inputs)
+        logits = self(inputs, time_buckets=time_inputs)
 
         # Calculate loss
         loss = self.loss_fn(
@@ -98,6 +104,7 @@ class LOBTransformerLightning(pl.LightningModule):
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Validation step."""
         input_ids = batch["input_ids"]
+        time_buckets = batch.get("time_buckets")
 
         if input_ids.size(1) <= 1:
             return None
@@ -105,8 +112,13 @@ class LOBTransformerLightning(pl.LightningModule):
         inputs = input_ids[:, :-1]
         targets = input_ids[:, 1:]
 
+        # Shift time buckets if available
+        time_inputs = None
+        if time_buckets is not None:
+            time_inputs = time_buckets[:, :-1]
+
         # Forward pass
-        logits = self(inputs)
+        logits = self(inputs, time_buckets=time_inputs)
 
         # Calculate loss
         loss = self.loss_fn(
@@ -129,6 +141,7 @@ class LOBTransformerLightning(pl.LightningModule):
     def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """Test step."""
         input_ids = batch["input_ids"]
+        time_buckets = batch.get("time_buckets")
 
         if input_ids.size(1) <= 1:
             return None
@@ -136,8 +149,13 @@ class LOBTransformerLightning(pl.LightningModule):
         inputs = input_ids[:, :-1]
         targets = input_ids[:, 1:]
 
+        # Shift time buckets if available
+        time_inputs = None
+        if time_buckets is not None:
+            time_inputs = time_buckets[:, :-1]
+
         # Forward pass
-        logits = self(inputs)
+        logits = self(inputs, time_buckets=time_inputs)
 
         # Calculate loss
         loss = self.loss_fn(
@@ -191,8 +209,9 @@ class LOBTransformerLightning(pl.LightningModule):
             for i, seq in enumerate(generated):
                 try:
                     decoded = self.tokenizer.decode_tokens(seq.cpu().numpy())
+                    preview = [token.to_string() for token in decoded[:10]]
                     self.logger.experiment.log({
-                        f"sample_{i}": "\n".join(decoded[:10])  # First 10 tokens
+                        f"sample_{i}": "\n".join(preview)
                     })
                 except Exception as e:
                     self.logger.experiment.log({f"sample_{i}": f"Decode error: {e}"})
@@ -305,23 +324,66 @@ class LOBDataModule(pl.LightningDataModule):
 
     def _collate_fn(self, batch):
         """Custom collate function for variable-length sequences."""
-        input_ids = [item[0] for item in batch]
+        # Handle new dictionary format from TokenBookDataset
+        if isinstance(batch[0], dict):
+            # Extract components
+            input_ids = [item["input_ids"] for item in batch]
+            time_buckets = [item.get("time_buckets") for item in batch]
+            labels = [item.get("labels") for item in batch]
 
-        # Pad sequences to same length
-        max_len = max(len(seq) for seq in input_ids)
-        padded_ids = []
+            # Pad sequences to same length
+            max_len = max(len(seq) for seq in input_ids)
+            padded_ids = []
+            padded_time_buckets = []
 
-        for seq in input_ids:
-            if len(seq) < max_len:
-                # Pad with zeros (or special padding token)
-                padded = torch.cat([seq, torch.zeros(max_len - len(seq), dtype=seq.dtype)])
-            else:
-                padded = seq[:max_len]
-            padded_ids.append(padded)
+            for i, seq in enumerate(input_ids):
+                if len(seq) < max_len:
+                    # Pad with zeros
+                    padded = torch.cat([seq, torch.zeros(max_len - len(seq), dtype=seq.dtype)])
+                else:
+                    padded = seq[:max_len]
+                padded_ids.append(padded)
 
-        return {
-            "input_ids": torch.stack(padded_ids)
-        }
+                # Pad time buckets if available
+                if time_buckets[i] is not None:
+                    time_seq = time_buckets[i]
+                    if len(time_seq) < max_len:
+                        padded_time = torch.cat([time_seq, torch.zeros(max_len - len(time_seq), dtype=time_seq.dtype)])
+                    else:
+                        padded_time = time_seq[:max_len]
+                    padded_time_buckets.append(padded_time)
+
+            result = {
+                "input_ids": torch.stack(padded_ids)
+            }
+
+            if padded_time_buckets:
+                result["time_buckets"] = torch.stack(padded_time_buckets)
+
+            if labels and labels[0] is not None:
+                result["labels"] = torch.stack(labels)
+
+            return result
+
+        else:
+            # Legacy format (tuple)
+            input_ids = [item[0] for item in batch]
+
+            # Pad sequences to same length
+            max_len = max(len(seq) for seq in input_ids)
+            padded_ids = []
+
+            for seq in input_ids:
+                if len(seq) < max_len:
+                    # Pad with zeros (or special padding token)
+                    padded = torch.cat([seq, torch.zeros(max_len - len(seq), dtype=seq.dtype)])
+                else:
+                    padded = seq[:max_len]
+                padded_ids.append(padded)
+
+            return {
+                "input_ids": torch.stack(padded_ids)
+            }
 
 
 def create_trainer(

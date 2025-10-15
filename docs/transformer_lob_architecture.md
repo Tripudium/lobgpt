@@ -165,7 +165,7 @@ class LOBTokenDataModule(pl.LightningDataModule):
         book_states = reconstruct_book_states(...)
 
         tokenizer = LOBTokenizer(...)
-        tokens = tokenizer.tokenize_events(inc_df, book_states)
+        tokens = tokenizer.tokenize(inc_df)
 
         # Create datasets
         self.train_dataset = TokenBookDataset(...)

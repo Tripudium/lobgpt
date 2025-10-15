@@ -221,8 +221,7 @@ def evaluate_model_comprehensive(model, test_dataset, tokenizer, config, device=
 
             # Print first few predictions
             for i, event in enumerate(predicted_events[:3]):
-                print(f"  {i+1}. {event.event_type.value} {event.side.value} "
-                      f"{event.price_level.value} {event.size_bucket.value}")
+                print(f"  {i+1}. {event.to_string()}")
 
             # Test probability estimation
             if len(predicted_events) >= 2:
@@ -233,7 +232,7 @@ def evaluate_model_comprehensive(model, test_dataset, tokenizer, config, device=
 
                 print(f"\nEvent probabilities:")
                 for event, prob in event_probs.items():
-                    print(f"  {event.event_type.value}: {prob:.4f}")
+                    print(f"  {event.event_type.name:<6s}: {prob:.4f}")
 
     except Exception as e:
         print(f"Warning: Could not test inference capabilities: {e}")

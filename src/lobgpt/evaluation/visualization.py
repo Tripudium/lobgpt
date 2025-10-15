@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 from typing import Dict, List, Optional, Tuple, Any
 import pandas as pd
 from pathlib import Path
+from collections import Counter
 
 from lobgpt.tokenizer import LOBTokenizer
 from lobgpt.models.lob_transformer import LOBTransformer
@@ -125,7 +126,7 @@ class LOBTransformerVisualizer:
                 # Try to decode token for annotation
                 event = self.tokenizer.decode_token(token_id)
                 if event:
-                    label = f"{event.event_type.value[:3]}-{event.side.value}"
+                    label = f"{event.event_type.name[:3]}-{event.side.name}"
                 else:
                     label = str(token_id)
             except:
@@ -192,26 +193,22 @@ class LOBTransformerVisualizer:
         axes[0,0].legend()
 
         # Side distribution
-        prompt_sides = [e.side.value for e in prompt_events]
-        gen_sides = [e.side.value for e in generated_events]
+        generated_side_counts = Counter(event.side.name for event in generated_events)
 
-        side_counts_prompt = pd.Series(prompt_sides).value_counts()
-        side_counts_gen = pd.Series(gen_sides).value_counts()
-
-        axes[0,1].pie([side_counts_gen.get('BID', 0), side_counts_gen.get('ASK', 0)],
+        axes[0,1].pie([generated_side_counts.get('BID', 0), generated_side_counts.get('ASK', 0)],
                      labels=['BID', 'ASK'],
                      autopct='%1.1f%%',
                      startangle=90)
         axes[0,1].set_title('Generated Side Distribution')
 
-        # Price level distribution
-        gen_price_levels = [e.price_level.value for e in generated_events]
+        # Price bucket distribution
+        gen_price_levels = [e.price_bucket.value for e in generated_events]
         price_level_counts = pd.Series(gen_price_levels).value_counts()
 
         axes[1,0].bar(range(len(price_level_counts)), price_level_counts.values)
-        axes[1,0].set_xlabel('Price Level')
+        axes[1,0].set_xlabel('Price Bucket')
         axes[1,0].set_ylabel('Count')
-        axes[1,0].set_title('Generated Price Level Distribution')
+        axes[1,0].set_title('Generated Price Bucket Distribution')
         axes[1,0].set_xticks(range(len(price_level_counts)))
         axes[1,0].set_xticklabels(price_level_counts.index, rotation=45)
 
