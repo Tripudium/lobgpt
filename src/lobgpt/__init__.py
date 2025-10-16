@@ -1,8 +1,9 @@
 from dotenv import load_dotenv
 
 from lobgpt.utils import polars_extensions
+from lobgpt.preprocessing import preprocess_messages_for_tokenization
 
 # Load environment variables from .env file automatically
 load_dotenv()
 
-__all__ = ["polars_extensions"]
+__all__ = ["polars_extensions", "preprocess_messages_for_tokenization"]

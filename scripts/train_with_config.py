@@ -19,9 +19,9 @@ from pytorch_lightning.loggers import WandbLogger
 from lobgpt.book_state import reconstruct_from_tardis
 from lobgpt.hdb import get_dataset
 from lobgpt.models.lob_transformer import LOBTransformer, LOBTransformerConfig
-from lobgpt.pytorch_dataset import TokenBookDataset
+from lobgpt.dataset import TokenBookDataset
 from lobgpt.tokenizer import LOBTokenizer
-from lobgpt.training.lob_trainer import LOBDataModule, LOBTransformerLightning
+from lobgpt.training import LOBDataModule, LOBTransformerLightning
 
 
 def create_datasets(cfg: DictConfig):

@@ -7,9 +7,9 @@ import torch
 from lobgpt.book_state import reconstruct_from_tardis
 from lobgpt.hdb import get_dataset
 from lobgpt.models.lob_transformer import LOBTransformerConfig, create_lob_transformer_small
-from lobgpt.pytorch_dataset import TokenBookDataset
+from lobgpt.dataset import TokenBookDataset
 from lobgpt.tokenizer import LOBTokenizer
-from lobgpt.training.lob_trainer import train_lob_transformer
+from lobgpt.training import train_lob_transformer
 
 
 def create_sample_datasets():

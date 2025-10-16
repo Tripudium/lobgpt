@@ -16,7 +16,7 @@ DEFAULT_EXECUTION_CODES: tuple[int, ...] = (4,)
 def reconstruct_snapshots(
     messages: pl.DataFrame,
     initial_snapshot: pl.DataFrame,
-    depth: int = 10,
+    depth: int = 50,
     *,
     event_column: str = "event_code",
     price_column: str = "prc",

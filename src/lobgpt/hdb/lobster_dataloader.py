@@ -333,7 +333,7 @@ class LobsterData(DataLoader):
         self,
         symbol: str,
         dates: List[str],
-        depth: int = 10,
+        depth: int = 50,
         lazy: bool = False,
         type: str = "incremental_book_L3"
     ) -> pl.DataFrame:

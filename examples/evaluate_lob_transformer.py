@@ -9,12 +9,12 @@ from pathlib import Path
 from lobgpt.hdb import get_dataset
 from lobgpt.book_state import reconstruct_from_tardis
 from lobgpt.tokenizer import LOBTokenizer
-from lobgpt.pytorch_dataset import TokenBookDataset
+from lobgpt.dataset import TokenBookDataset
 from lobgpt.models.lob_transformer import LOBTransformerConfig, create_lob_transformer_small
-from lobgpt.training.lob_trainer import LOBTransformerLightning
-from lobgpt.evaluation.metrics import LOBEvaluator, evaluate_model
-from lobgpt.evaluation.visualization import LOBTransformerVisualizer, plot_loss_landscape
-from lobgpt.inference.generator import LOBInference, GenerationConfig
+from lobgpt.training import LOBTransformerLightning
+from lobgpt.metrics import LOBEvaluator, evaluate_model
+from lobgpt.visualization import LOBTransformerVisualizer, plot_loss_landscape
+from lobgpt.inference import LOBInference, GenerationConfig
 
 
 def create_evaluation_datasets():

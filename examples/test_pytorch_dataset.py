@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from lobgpt.hdb import get_dataset
 from lobgpt.book_state import reconstruct_from_tardis
-from lobgpt.pytorch_dataset import LOBPyTorchDataset, create_lob_pytorch_dataloaders
+from lobgpt.dataset import LOBPyTorchDataset, create_lob_pytorch_dataloaders
 from lobgpt.models.deeplob import deeplob
 
 
