@@ -2,20 +2,19 @@
 Visualization tools for LOB Transformer analysis and monitoring.
 """
 
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
-from typing import Dict, List, Optional, Tuple, Any
-import pandas as pd
-from pathlib import Path
 from collections import Counter
+from typing import List, Optional
 
-from lobgpt.tokenizer import LOBTokenizer
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import seaborn as sns
+import torch
+from plotly.subplots import make_subplots
+
 from lobgpt.models.lob_transformer import LOBTransformer
+from lobgpt.tokenizer import LOBTokenizer
 
 
 class LOBTransformerVisualizer:

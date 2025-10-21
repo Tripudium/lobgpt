@@ -4,9 +4,11 @@ Pre-processing utilities for LOB message streams.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Sequence
+from typing import Dict, List, Sequence
 
 import polars as pl
+
+from lobgpt.hdb.build_snapshot import reconstruct_snapshots
 
 
 class OrderBookState:
@@ -92,6 +94,7 @@ def preprocess_messages_for_tokenization(
     cancel_codes: Sequence[int] = (2,),
     deletion_codes: Sequence[int] = (3,),
     execution_codes: Sequence[int] = (4, 5),
+    include_reference_info: bool = False,
 ) -> pl.DataFrame:
     """
     Convert raw incremental messages into the feature representation described in Nagy et al.
@@ -116,20 +119,24 @@ def preprocess_messages_for_tokenization(
         raise ValueError(f"Messages missing required columns: {sorted(missing)}")
 
     if messages.is_empty():
-        return pl.DataFrame(
-            schema={
-                timestamp_column: pl.Int64,
-                event_column: pl.Int32,
-                "side": pl.Int8,
-                "price_offset_ticks": pl.Int32,
-                "size": pl.Float64,
-                "inter_arrival_ns": pl.Int64,
-                "prev_price": pl.Float64,
-                "prev_size": pl.Float64,
-                "prev_timestamp": pl.Int64,
-                order_id_column: pl.Int64,
-            }
-        )
+        schema = {
+            timestamp_column: pl.Int64,
+            event_column: pl.Int32,
+            "side": pl.Int8,
+            "price_offset_ticks": pl.Int32,
+            "size": pl.Float64,
+            "inter_arrival_ns": pl.Int64,
+            order_id_column: pl.Int64,
+        }
+        if include_reference_info:
+            schema.update(
+                {
+                    "prev_price": pl.Float64,
+                    "prev_size": pl.Float64,
+                    "prev_timestamp": pl.Int64,
+                }
+            )
+        return pl.DataFrame(schema=schema)
 
     submission_set = set(submission_codes)
     cancel_set = set(cancel_codes)
@@ -141,6 +148,7 @@ def preprocess_messages_for_tokenization(
 
     records: list[dict] = []
     last_timestamp: int | None = None
+    day_ns = 24 * 60 * 60 * 1_000_000_000
 
     sorted_messages = messages.sort(timestamp_column)
 
@@ -168,6 +176,9 @@ def preprocess_messages_for_tokenization(
         else:
             price_offset_ticks = int(round((reference_price - mid_price) / tick_size))
 
+        time_of_day_ns = ts % day_ns
+        time_of_day_s = time_of_day_ns // 1_000_000_000
+
         record = {
             timestamp_column: ts,
             event_column: event_code,
@@ -175,26 +186,21 @@ def preprocess_messages_for_tokenization(
             "price_offset_ticks": price_offset_ticks,
             "size": size,
             "inter_arrival_ns": inter_arrival,
-            "prev_price": prev_price,
-            "prev_size": prev_size,
-            "prev_timestamp": prev_timestamp,
+            "time_of_day_s": int(time_of_day_s),
             order_id_column: order_id,
         }
+        if include_reference_info:
+            record["prev_price"] = prev_price
+            record["prev_size"] = prev_size
+            record["prev_timestamp"] = prev_timestamp
         records.append(record)
 
         # Apply book update --------------------------------------------
         if event_code in submission_set:
             effective_price = reference_price
             book.add_order(order_id, effective_price, size, is_buy, ts)
-        elif event_code in cancellation_set:
-            if stored_order:
-                book.remove_volume(order_id, size)
-        elif event_code in deletion_set:
-            if stored_order:
-                book.remove_volume(order_id, size)
-        elif event_code in execution_set:
-            if stored_order:
-                book.remove_volume(order_id, size)
+        elif event_code in removal_set and stored_order:
+            book.remove_volume(order_id, size)
         # Other event types are ignored
 
     schema = {
@@ -204,13 +210,178 @@ def preprocess_messages_for_tokenization(
         "price_offset_ticks": pl.Int32,
         "size": pl.Float64,
         "inter_arrival_ns": pl.Int64,
-        "prev_price": pl.Float64,
-        "prev_size": pl.Float64,
-        "prev_timestamp": pl.Int64,
+        "time_of_day_s": pl.Int32,
         order_id_column: pl.Int64,
     }
+    if include_reference_info:
+        schema.update(
+            {
+                "prev_price": pl.Float64,
+                "prev_size": pl.Float64,
+                "prev_timestamp": pl.Int64,
+            }
+        )
 
     return pl.from_dicts(records, schema=schema)
 
 
-__all__ = ["preprocess_messages_for_tokenization"]
+def create_volume_images(
+    messages: pl.DataFrame,
+    initial_snapshot: pl.DataFrame,
+    *,
+    depth: int = 10,
+) -> pl.DataFrame:
+    """Generate volume images (mid-price + level volumes) from messages and initial snapshot."""
+
+    if messages.is_empty() or initial_snapshot.is_empty():
+        raise ValueError("Messages and initial snapshot must be non-empty.")
+
+    snapshots = reconstruct_snapshots(messages, initial_snapshot, depth=depth)
+    day_ns = 24 * 60 * 60 * 1_000_000_000
+
+    ask_price_cols = [f"asks[{i}].price" for i in range(depth)]
+    bid_price_cols = [f"bids[{i}].price" for i in range(depth)]
+
+    best_ask_expr = pl.min_horizontal([pl.col(col) for col in ask_price_cols]).alias("best_ask")
+    best_bid_expr = pl.max_horizontal([pl.col(col) for col in bid_price_cols]).alias("best_bid")
+
+    snapshots = snapshots.with_columns([best_ask_expr, best_bid_expr])
+
+    snapshots = snapshots.with_columns(
+        pl.when(pl.col("best_ask").is_not_null() & pl.col("best_bid").is_not_null())
+        .then((pl.col("best_ask") + pl.col("best_bid")) / 2)
+        .when(pl.col("best_ask").is_not_null())
+        .then(pl.col("best_ask"))
+        .when(pl.col("best_bid").is_not_null())
+        .then(pl.col("best_bid"))
+        .otherwise(None)
+        .alias("mid_price")
+    ).with_columns(
+        (pl.col("tst") % day_ns).floor_div(1_000_000_000).cast(pl.Int32).alias("time_of_day_s")
+    )
+
+    select_columns = ["tst", "mid_price", "time_of_day_s"]
+    for level in range(depth):
+        select_columns.extend([
+            f"asks[{level}].amount",
+            f"bids[{level}].amount",
+        ])
+
+    volume_df = snapshots.select(select_columns)
+
+    rename_map = {
+        f"asks[{level}].amount": f"ask_volume_L{level + 1}"
+        for level in range(depth)
+    }
+    rename_map.update(
+        {
+            f"bids[{level}].amount": f"bid_volume_L{level + 1}"
+            for level in range(depth)
+        }
+    )
+
+    return volume_df.rename(rename_map)
+
+
+def prepare_message_volume_features(
+    messages: pl.DataFrame,
+    snapshots: pl.DataFrame,
+    *,
+    tick_size: float,
+    depth: int = 10,
+    event_column: str = "event_code",
+    price_column: str = "prc",
+    volume_column: str = "vol",
+    side_column: str = "is_buy",
+    timestamp_column: str = "tst",
+) -> pl.DataFrame:
+    """Combine per-message features with aligned volume images."""
+
+    if messages.is_empty() or snapshots.is_empty():
+        raise ValueError("Messages and snapshots must be non-empty.")
+
+    messages_sorted = messages.sort(timestamp_column)
+    snapshots_sorted = snapshots.sort(timestamp_column)
+
+    combined = messages_sorted.join(snapshots_sorted, on=timestamp_column, how="inner")
+    if combined.is_empty():
+        raise ValueError("No overlapping timestamps between messages and snapshots.")
+
+    ask_price_cols: List[str] = [col for col in combined.columns if col.startswith("asks[") and col.endswith("].price")][:depth]
+    bid_price_cols: List[str] = [col for col in combined.columns if col.startswith("bids[") and col.endswith("].price")][:depth]
+    ask_volume_cols: List[str] = [col for col in combined.columns if col.startswith("asks[") and col.endswith("].amount")][:depth]
+    bid_volume_cols: List[str] = [col for col in combined.columns if col.startswith("bids[") and col.endswith("].amount")][:depth]
+
+    if len(ask_price_cols) < depth or len(bid_price_cols) < depth:
+        raise ValueError("Snapshot depth insufficient for requested depth.")
+
+    combined = combined.with_columns([
+        pl.when(pl.col(side_column)).then(pl.lit(1, dtype=pl.Int8)).otherwise(pl.lit(-1, dtype=pl.Int8)).alias("side"),
+        pl.col(timestamp_column).diff().fill_null(0).alias("inter_arrival_ns"),
+    ])
+
+    best_ask_expr = pl.min_horizontal([pl.col(col) for col in ask_price_cols]).alias("best_ask")
+    best_bid_expr = pl.max_horizontal([pl.col(col) for col in bid_price_cols]).alias("best_bid")
+    combined = combined.with_columns([best_ask_expr, best_bid_expr])
+
+    day_ns = 24 * 60 * 60 * 1_000_000_000
+    combined = combined.with_columns(
+        pl.when(pl.col("best_ask").is_not_null() & pl.col("best_bid").is_not_null())
+        .then((pl.col("best_ask") + pl.col("best_bid")) / 2)
+        .when(pl.col("best_ask").is_not_null())
+        .then(pl.col("best_ask"))
+        .when(pl.col("best_bid").is_not_null())
+        .then(pl.col("best_bid"))
+        .otherwise(pl.lit(0.0))
+        .alias("mid_price")
+    ).with_columns(
+        (pl.col(timestamp_column) % day_ns).floor_div(1_000_000_000).cast(pl.Int32).alias("time_of_day_s")
+    )
+
+    effective_price = (
+        pl.when(pl.col(price_column) > 0)
+        .then(pl.col(price_column))
+        .when(pl.col("side") == 1)
+        .then(pl.col("best_bid"))
+        .otherwise(pl.col("best_ask"))
+    )
+
+    combined = combined.with_columns(
+        ((effective_price - pl.col("mid_price")) / tick_size)
+        .round()
+        .cast(pl.Int32)
+        .alias("price_offset_ticks")
+    )
+
+    rename_map = {
+        ask_volume_cols[idx]: f"ask_volume_L{idx + 1}"
+        for idx in range(depth)
+    }
+    rename_map.update(
+        {
+            bid_volume_cols[idx]: f"bid_volume_L{idx + 1}"
+            for idx in range(depth)
+        }
+    )
+
+    combined = combined.rename(rename_map)
+
+    selected_columns = [
+        timestamp_column,
+        event_column,
+        "side",
+        "price_offset_ticks",
+        volume_column,
+        "inter_arrival_ns",
+        "mid_price",
+        "time_of_day_s",
+    ] + list(rename_map.values())
+
+    return combined.select(selected_columns)
+
+
+__all__ = [
+    "preprocess_messages_for_tokenization",
+    "create_volume_images",
+    "prepare_message_volume_features",
+]

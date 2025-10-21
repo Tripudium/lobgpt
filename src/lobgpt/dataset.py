@@ -2,7 +2,7 @@
 Native PyTorch Dataset classes for Limit Order Book data.
 """
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -12,6 +12,8 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
 from lobgpt.time_encoding import TimeEncoder, create_time_encoder_for_crypto
+from lobgpt.preprocessing import prepare_message_volume_features, preprocess_messages_for_tokenization
+from lobgpt.tokenizer import ConfigurableTokenizer, DEFAULT_TOKENIZER_CONFIG_PATH
 
 
 class L2BookDataset(Dataset):
@@ -447,3 +449,84 @@ class LOBPyTorchDataset(TokenBookDataset):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+
+class MessageVolumeDataset(Dataset):
+    """Sequence dataset combining message features and volume images."""
+
+    def __init__(
+        self,
+        features: pl.DataFrame,
+        *,
+        sequence_length: int = 128,
+        stride: int = 1,
+        timestamp_column: str = "tst",
+        target_column: str = "event_code",
+        categorical_columns: Optional[Sequence[str]] = None,
+        numeric_columns: Optional[Sequence[str]] = None,
+        volume_columns: Optional[Sequence[str]] = None,
+    ) -> None:
+        if features.is_empty():
+            raise ValueError("Features dataframe must be non-empty.")
+
+        self.sequence_length = sequence_length
+        self.stride = stride
+        self.timestamp_column = timestamp_column
+        self.target_column = target_column
+
+        available_cols = set(features.columns)
+        if timestamp_column not in available_cols or target_column not in available_cols:
+            raise ValueError("Features must contain timestamp and target columns.")
+
+        if categorical_columns is None:
+            categorical_columns = [col for col in ("event_code", "side") if col in available_cols]
+        if numeric_columns is None:
+            numeric_columns = [col for col in ("price_offset_ticks", "size", "inter_arrival_ns") if col in available_cols]
+        if volume_columns is None:
+            volume_columns = [col for col in features.columns if col.startswith("ask_volume_") or col.startswith("bid_volume_") or col == "mid_price"]
+
+        self.categorical_columns = list(categorical_columns)
+        self.numeric_columns = list(numeric_columns)
+        self.volume_columns = list(volume_columns)
+
+        self.categorical_array = features.select(self.categorical_columns).to_numpy() if self.categorical_columns else None
+        self.numeric_array = features.select(self.numeric_columns).to_numpy() if self.numeric_columns else None
+        self.volume_array = features.select(self.volume_columns).to_numpy() if self.volume_columns else None
+
+        self.targets = features.select(target_column).to_numpy().reshape(-1)
+        self.timestamps = features.select(timestamp_column).to_numpy().reshape(-1)
+
+        total = len(self.targets)
+        self.n_sequences = max(0, (total - sequence_length))
+        if self.n_sequences <= 0:
+            raise ValueError("Not enough rows to create sequences with the specified length.")
+
+    def __len__(self) -> int:
+        return self.n_sequences
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        start = idx * self.stride
+        end = start + self.sequence_length
+        target_idx = end
+
+        if target_idx >= len(self.targets):
+            raise IndexError("Index exceeds dataset bounds")
+
+        item: Dict[str, torch.Tensor] = {}
+
+        if self.categorical_array is not None:
+            cat_slice = self.categorical_array[start:end]
+            item["categorical_inputs"] = torch.from_numpy(cat_slice).long()
+
+        if self.numeric_array is not None:
+            num_slice = self.numeric_array[start:end]
+            item["numeric_inputs"] = torch.from_numpy(num_slice).float()
+
+        if self.volume_array is not None:
+            vol_slice = self.volume_array[start:end]
+            item["volume_inputs"] = torch.from_numpy(vol_slice).float()
+
+        item["target_event"] = torch.tensor(int(self.targets[target_idx]), dtype=torch.long)
+        item["target_timestamp"] = torch.tensor(int(self.timestamps[target_idx]), dtype=torch.long)
+
+        return item

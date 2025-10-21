@@ -1,0 +1,124 @@
+components:
+- name: event
+  type: categorical
+  source_column: event_code
+  values:
+  - ADD
+  - CANCEL
+  - DELETION
+  - EXECUTION
+  - HALT
+  - OTHER
+  mapping:
+    '1': ADD
+    '2': CANCEL
+    '3': DELETION
+    '4': EXECUTION
+    '5': EXECUTION
+    '6': EXECUTION
+    '7': HALT
+- name: side
+  type: categorical
+  source_column: side
+  values:
+  - -1
+  - 1
+- name: price_bucket
+  type: numeric_bucket
+  source_column: price_offset_ticks
+  bins:
+  - -inf
+  - -50
+  - -20
+  - -10
+  - -5
+  - -2
+  - -1
+  - 0
+  - 1
+  - 2
+  - 5
+  - 10
+  - 20
+  - 50
+  - inf
+  labels:
+  - NEG_GT_50
+  - NEG_20_50
+  - NEG_10_20
+  - NEG_5_10
+  - NEG_2_5
+  - NEG_1_2
+  - NEG_0_1
+  - AT_REFERENCE
+  - POS_0_1
+  - POS_1_2
+  - POS_2_5
+  - POS_5_10
+  - POS_10_20
+  - POS_20_50
+  - POS_GT_50
+- name: size_bucket
+  type: numeric_bucket
+  source_column: size
+  bins:
+  - -inf
+  - 0
+  - 1
+  - 5
+  - 20
+  - 100
+  - 500
+  - 2000
+  - inf
+  labels:
+  - ZERO
+  - MICRO
+  - SMALL
+  - MEDIUM
+  - LARGE
+  - XLARGE
+  - XXLARGE
+  - BLOCK
+- name: time_bucket
+  type: numeric_bucket
+  source_column: inter_arrival_ns
+  bins:
+  - -inf
+  - 1000
+  - 10000
+  - 100000
+  - 1000000
+  - 5000000
+  - 10000000
+  - 100000000
+  - 1000000000
+  - inf
+  labels:
+  - LEQ_1_US
+  - LEQ_10_US
+  - LEQ_100_US
+  - LEQ_1_MS
+  - LEQ_5_MS
+  - LEQ_10_MS
+  - LEQ_100_MS
+  - LEQ_1_S
+  - GT_1_S
+- name: time_of_day
+  type: numeric_bucket
+  source_column: time_of_day_s
+  bins:
+  - -inf
+  - 32400
+  - 36000
+  - 43200
+  - 46800
+  - 57600
+  - inf
+  labels:
+  - PRE_OPEN
+  - OPEN_TO_10
+  - MORNING
+  - MIDDAY
+  - AFTERNOON
+  - CLOSE

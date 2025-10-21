@@ -26,12 +26,15 @@ compact vocabulary that can be fed to language-model-style architectures.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Dict, Iterable, Optional, Sequence
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 import polars as pl
+import yaml
 
 # ---------------------------------------------------------------------------
 # Enumerations describing the categorical factors of the token
@@ -524,6 +527,209 @@ class LOBTokenizer:
             )
 
 
+@dataclass
+class ComponentConfig:
+    name: str
+    type: str
+    source_column: str
+    values: Optional[List[str]] = None
+    mapping: Optional[Dict[str, str]] = None
+    bins: Optional[List[float]] = None
+    labels: Optional[List[str]] = None
+
+
+@dataclass
+class TokenizerConfig:
+    components: List[ComponentConfig]
+
+
+def _parse_float(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        lower = value.lower()
+        if lower in {"inf", "+inf", "infinity"}:
+            return math.inf
+        if lower in {"-inf", "-infinity"}:
+            return -math.inf
+        return float(value)
+    raise ValueError(f"Could not interpret {value!r} as float")
+
+
+def load_tokenizer_config(path: str | Path) -> TokenizerConfig:
+    path = Path(path)
+    data = yaml.safe_load(path.read_text())
+    components_cfg: List[ComponentConfig] = []
+    for entry in data.get("components", []):
+        mapping = entry.get("mapping")
+        if mapping is not None:
+            mapping = {str(k): str(v) for k, v in mapping.items()}
+        bins = entry.get("bins")
+        if bins is not None:
+            bins = [_parse_float(val) for val in bins]
+        component = ComponentConfig(
+            name=entry["name"],
+            type=entry["type"],
+            source_column=entry["source_column"],
+            values=entry.get("values"),
+            mapping=mapping,
+            bins=bins,
+            labels=entry.get("labels"),
+        )
+        components_cfg.append(component)
+    return TokenizerConfig(components=components_cfg)
+
+
+class _BaseComponentEncoder:
+    def __init__(self, config: ComponentConfig):
+        self.config = config
+        self.name = config.name
+        self.source_column = config.source_column
+
+    @property
+    def cardinality(self) -> int:
+        raise NotImplementedError
+
+    def encode(self, value) -> int:
+        raise NotImplementedError
+
+    def decode(self, index: int) -> str:
+        raise NotImplementedError
+
+
+class _CategoricalEncoder(_BaseComponentEncoder):
+    def __init__(self, config: ComponentConfig):
+        super().__init__(config)
+        if not config.values:
+            raise ValueError(f"Component '{config.name}' must define 'values'.")
+        self.categories = [str(v) for v in config.values]
+        self.index = {category: idx for idx, category in enumerate(self.categories)}
+        mapping = config.mapping or {}
+        self.mapping = {str(k): str(v) for k, v in mapping.items()}
+
+    @property
+    def cardinality(self) -> int:
+        return len(self.categories)
+
+    def encode(self, value) -> int:
+        mapped = self.mapping.get(str(value), str(value))
+        if mapped not in self.index:
+            raise ValueError(f"Value '{value}' is not valid for component '{self.name}'.")
+        return self.index[mapped]
+
+    def decode(self, index: int) -> str:
+        if not 0 <= index < self.cardinality:
+            raise IndexError(f"Index {index} out of bounds for component '{self.name}'.")
+        return self.categories[index]
+
+
+class _NumericBucketEncoder(_BaseComponentEncoder):
+    def __init__(self, config: ComponentConfig):
+        super().__init__(config)
+        bins = config.bins
+        if bins is None or len(bins) < 2:
+            raise ValueError(f"Component '{config.name}' must define at least two bin edges.")
+        self.bin_edges = np.asarray(bins, dtype=float)
+        if not np.all(np.diff(self.bin_edges) > 0):
+            raise ValueError(f"Component '{config.name}' requires strictly increasing bin edges.")
+        expected_labels = len(self.bin_edges) + 1
+        if config.labels:
+            if len(config.labels) != expected_labels:
+                raise ValueError(
+                    f"Component '{config.name}' expects {expected_labels} labels but received {len(config.labels)}."
+                )
+            self.labels = [str(label) for label in config.labels]
+        else:
+            self.labels = [f"{config.name}_{i}" for i in range(expected_labels)]
+
+    @property
+    def cardinality(self) -> int:
+        return len(self.labels)
+
+    def encode(self, value) -> int:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return 0
+        idx = int(np.digitize(float(value), self.bin_edges, right=False))
+        if idx >= self.cardinality:
+            idx = self.cardinality - 1
+        return idx
+
+    def decode(self, index: int) -> str:
+        if not 0 <= index < self.cardinality:
+            raise IndexError(f"Index {index} out of bounds for component '{self.name}'.")
+        return self.labels[index]
+
+
+class ConfigurableTokenizer:
+    """Tokenizer that derives its encoding from a configuration file."""
+
+    def __init__(self, config: TokenizerConfig):
+        self.config = config
+        self.components: List[_BaseComponentEncoder] = []
+        for component_cfg in config.components:
+            component_type = component_cfg.type.lower()
+            if component_type == "categorical":
+                encoder = _CategoricalEncoder(component_cfg)
+            elif component_type in {"numeric_bucket", "bucket"}:
+                encoder = _NumericBucketEncoder(component_cfg)
+            else:
+                raise ValueError(f"Unknown component type '{component_cfg.type}' in tokenizer config.")
+            self.components.append(encoder)
+
+        vocab_size = 1
+        for encoder in self.components:
+            vocab_size *= encoder.cardinality
+        self._vocab_size = vocab_size
+        self._vocab_cache: Optional[Dict[int, str]] = None
+
+    @classmethod
+    def from_config_file(cls, path: str | Path) -> "ConfigurableTokenizer":
+        return cls(load_tokenizer_config(path))
+
+    @property
+    def vocab_size(self) -> int:
+        return self._vocab_size
+
+    def encode_row(self, row: Dict[str, object]) -> int:
+        token_id = 0
+        for encoder in self.components:
+            idx = encoder.encode(row.get(encoder.source_column))
+            token_id = token_id * encoder.cardinality + idx
+        return token_id
+
+    def encode_dataframe(self, df: pl.DataFrame) -> np.ndarray:
+        return np.asarray([self.encode_row(row) for row in df.iter_rows(named=True)], dtype=np.int64)
+
+    def decode_token(self, token_id: int) -> Dict[str, str]:
+        if token_id < 0 or token_id >= self.vocab_size:
+            raise IndexError(f"Token id {token_id} outside vocabulary range [0, {self.vocab_size}).")
+        remainder = token_id
+        decoded_reversed: List[str] = []
+        for encoder in reversed(self.components):
+            idx = remainder % encoder.cardinality
+            remainder //= encoder.cardinality
+            decoded_reversed.append(encoder.decode(idx))
+        decoded_reversed.reverse()
+        return {encoder.name: label for encoder, label in zip(self.components, decoded_reversed)}
+
+    def decode_tokens(self, tokens: Iterable[int]) -> List[Dict[str, str]]:
+        return [self.decode_token(token) for token in tokens]
+
+    @property
+    def vocab(self) -> Dict[int, str]:
+        if self._vocab_cache is not None:
+            return self._vocab_cache
+        vocab = {}
+        for token_id in range(self.vocab_size):
+            parts = [f"{encoder.name}={value}" for encoder, value in self.decode_token(token_id).items()]
+            vocab[token_id] = "|".join(parts)
+        self._vocab_cache = vocab
+        return vocab
+
+
+DEFAULT_TOKENIZER_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "tokenizer" / "default.yaml"
+
+
 __all__ = [
     "EventType",
     "Side",
@@ -532,5 +738,9 @@ __all__ = [
     "TimeBucket",
     "TokenComponents",
     "LOBTokenizer",
+    "TokenizerConfig",
+    "ComponentConfig",
+    "load_tokenizer_config",
+    "ConfigurableTokenizer",
+    "DEFAULT_TOKENIZER_CONFIG_PATH",
 ]
-    ...
